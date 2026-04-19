@@ -1,0 +1,505 @@
+name: Build cfilament DLL
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'libs/cfilament/**'
+      - 'filament/**'
+      - 'libs/filabridge/**'
+      - 'libs/filaflat/**'
+      - 'libs/utils/**'
+      - '.github/workflows/build-cfilament.yml'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'libs/cfilament/**'
+      - 'filament/**'
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'CMake build type'
+        required: true
+        default: 'Release'
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Global defaults
+# ──────────────────────────────────────────────────────────────────────────────
+env:
+  BUILD_TYPE: ${{ github.event.inputs.build_type || 'Release' }}
+  ARTIFACT_RETENTION_DAYS: 30
+
+jobs:
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Windows x64 – MSVC 2022
+  # ────────────────────────────────────────────────────────────────────────────
+  windows-x64:
+    name: Windows x64 (MSVC)
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build/windows-x64 `
+            -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
+            -DFILAMENT_SKIP_SAMPLES=ON `
+            -DFILAMENT_BUILD_TESTING=OFF `
+            -DFILAMENT_BUILD_FILAMAT=OFF `
+            -DFILAMENT_SUPPORTS_VULKAN=OFF `
+            -DFILAMENT_SUPPORTS_METAL=OFF `
+            -DFILAMENT_SKIP_SDL2=ON `
+            -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON
+
+      - name: Build cfilament
+        run: |
+          cmake --build build/windows-x64 `
+            --config ${{ env.BUILD_TYPE }} `
+            --target cfilament `
+            --parallel
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          $src = "build/windows-x64/${{ env.BUILD_TYPE }}"
+          $dst = "dist/windows-x64"
+          New-Item -ItemType Directory -Force $dst | Out-Null
+          # DLL, import lib, and any generated headers
+          Get-ChildItem $src -Include "cfilament.dll","cfilament.lib" -Recurse |
+            Copy-Item -Destination $dst
+          # Public C API headers
+          if (Test-Path "libs/cfilament/include") {
+            Copy-Item -Recurse "libs/cfilament/include" "$dst/include"
+          }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cfilament-windows-x64
+          path: dist/windows-x64/
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Windows ARM64 – MSVC 2022
+  # ────────────────────────────────────────────────────────────────────────────
+  windows-arm64:
+    name: Windows ARM64 (MSVC)
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build/windows-arm64 `
+            -G "Visual Studio 17 2022" -A ARM64 `
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} `
+            -DFILAMENT_SKIP_SAMPLES=ON `
+            -DFILAMENT_BUILD_TESTING=OFF `
+            -DFILAMENT_BUILD_FILAMAT=OFF `
+            -DFILAMENT_SUPPORTS_VULKAN=OFF `
+            -DFILAMENT_SUPPORTS_METAL=OFF `
+            -DFILAMENT_SKIP_SDL2=ON `
+            -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON
+
+      - name: Build cfilament
+        run: |
+          cmake --build build/windows-arm64 `
+            --config ${{ env.BUILD_TYPE }} `
+            --target cfilament `
+            --parallel
+
+      - name: Collect artifacts
+        shell: pwsh
+        run: |
+          $src = "build/windows-arm64/${{ env.BUILD_TYPE }}"
+          $dst = "dist/windows-arm64"
+          New-Item -ItemType Directory -Force $dst | Out-Null
+          Get-ChildItem $src -Include "cfilament.dll","cfilament.lib" -Recurse |
+            Copy-Item -Destination $dst
+          if (Test-Path "libs/cfilament/include") {
+            Copy-Item -Recurse "libs/cfilament/include" "$dst/include"
+          }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cfilament-windows-arm64
+          path: dist/windows-arm64/
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Linux x86_64 – Clang
+  # ────────────────────────────────────────────────────────────────────────────
+  linux-x64:
+    name: Linux x86_64 (Clang)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            clang \
+            libc++-dev libc++abi-dev \
+            ninja-build \
+            libgl1-mesa-dev libglu1-mesa-dev \
+            libx11-dev libxcb1-dev libxrandr-dev \
+            libxi-dev libxinerama-dev libxxf86vm-dev \
+            libwayland-dev wayland-protocols
+
+      - name: Configure CMake
+        env:
+          CC: clang
+          CXX: clang++
+        run: |
+          cmake -S . -B build/linux-x64 \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+            -DFILAMENT_SKIP_SAMPLES=ON \
+            -DFILAMENT_BUILD_TESTING=OFF \
+            -DFILAMENT_BUILD_FILAMAT=OFF \
+            -DFILAMENT_SUPPORTS_XCB=ON \
+            -DFILAMENT_SUPPORTS_XLIB=ON \
+            -DFILAMENT_SKIP_SDL2=ON
+
+      - name: Build cfilament
+        run: cmake --build build/linux-x64 --target cfilament --parallel $(nproc)
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist/linux-x64
+          find build/linux-x64 -name "libcfilament.so*" -exec cp -P {} dist/linux-x64/ \;
+          [ -d libs/cfilament/include ] && cp -r libs/cfilament/include dist/linux-x64/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cfilament-linux-x64
+          path: dist/linux-x64/
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Linux ARM64 – cross-compile via Clang + QEMU
+  # ────────────────────────────────────────────────────────────────────────────
+  linux-arm64:
+    name: Linux ARM64 (cross-compile)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install cross-compile toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            clang \
+            ninja-build \
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu \
+            libc6-dev-arm64-cross \
+            libstdc++-12-dev-arm64-cross
+
+      - name: Configure CMake (cross)
+        env:
+          CC: clang
+          CXX: clang++
+        run: |
+          cmake -S . -B build/linux-arm64 \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DCMAKE_C_COMPILER_TARGET=aarch64-linux-gnu \
+            -DCMAKE_CXX_COMPILER_TARGET=aarch64-linux-gnu \
+            -DFILAMENT_SKIP_SAMPLES=ON \
+            -DFILAMENT_BUILD_TESTING=OFF \
+            -DFILAMENT_BUILD_FILAMAT=OFF \
+            -DFILAMENT_SUPPORTS_XCB=OFF \
+            -DFILAMENT_SUPPORTS_XLIB=OFF \
+            -DFILAMENT_SUPPORTS_EGL_ON_LINUX=ON \
+            -DFILAMENT_SKIP_SDL2=ON \
+            -DUSE_STATIC_LIBCXX=OFF
+
+      - name: Build cfilament
+        run: cmake --build build/linux-arm64 --target cfilament --parallel $(nproc)
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist/linux-arm64
+          find build/linux-arm64 -name "libcfilament.so*" -exec cp -P {} dist/linux-arm64/ \;
+          [ -d libs/cfilament/include ] && cp -r libs/cfilament/include dist/linux-arm64/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cfilament-linux-arm64
+          path: dist/linux-arm64/
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # macOS (universal: x86_64 + arm64)
+  # ────────────────────────────────────────────────────────────────────────────
+  macos-universal:
+    name: macOS Universal (x86_64 + arm64)
+    runs-on: macos-14          # Apple Silicon runner; can cross-compile x86_64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: brew install ninja
+
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build/macos-universal \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+            -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DFILAMENT_SKIP_SAMPLES=ON \
+            -DFILAMENT_BUILD_TESTING=OFF \
+            -DFILAMENT_BUILD_FILAMAT=OFF \
+            -DFILAMENT_SUPPORTS_METAL=ON \
+            -DFILAMENT_SKIP_SDL2=ON
+
+      - name: Build cfilament
+        run: cmake --build build/macos-universal --target cfilament --parallel $(sysctl -n hw.logicalcpu)
+
+      - name: Verify universal binary
+        run: |
+          lib=$(find build/macos-universal -name "libcfilament.dylib" | head -1)
+          lipo -info "$lib"
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist/macos-universal
+          find build/macos-universal -name "libcfilament*.dylib" -exec cp {} dist/macos-universal/ \;
+          [ -d libs/cfilament/include ] && cp -r libs/cfilament/include dist/macos-universal/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cfilament-macos-universal
+          path: dist/macos-universal/
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Android (armeabi-v7a, arm64-v8a, x86, x86_64)
+  # ────────────────────────────────────────────────────────────────────────────
+  android:
+    name: Android ${{ matrix.abi }}
+    runs-on: ubuntu-22.04
+
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [armeabi-v7a, arm64-v8a, x86, x86_64]
+
+    env:
+      ANDROID_NDK_VERSION: "26"          # keep in sync with FILAMENT_NDK_VERSION
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK/NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK ${{ env.ANDROID_NDK_VERSION }}
+        run: sdkmanager "ndk;${{ env.ANDROID_NDK_VERSION }}.0.0"
+
+      - name: Set NDK path
+        run: echo "NDK_PATH=$ANDROID_SDK_ROOT/ndk/${{ env.ANDROID_NDK_VERSION }}.0.0" >> $GITHUB_ENV
+
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build/android-${{ matrix.abi }} \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+            -DCMAKE_TOOLCHAIN_FILE=${{ env.NDK_PATH }}/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=${{ matrix.abi }} \
+            -DANDROID_PLATFORM=android-21 \
+            -DANDROID_STL=c++_shared \
+            -DFILAMENT_NDK_VERSION=${{ env.ANDROID_NDK_VERSION }} \
+            -DFILAMENT_SKIP_SAMPLES=ON \
+            -DFILAMENT_BUILD_TESTING=OFF \
+            -DFILAMENT_BUILD_FILAMAT=OFF \
+            -DFILAMENT_SUPPORTS_VULKAN=ON \
+            -DFILAMENT_SUPPORTS_OPENGL=ON \
+            -DFILAMENT_SKIP_SDL2=ON
+
+      - name: Build cfilament
+        run: cmake --build build/android-${{ matrix.abi }} --target cfilament --parallel $(nproc)
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist/android-${{ matrix.abi }}
+          find build/android-${{ matrix.abi }} -name "libcfilament.so" -exec cp {} dist/android-${{ matrix.abi }}/ \;
+          [ -d libs/cfilament/include ] && cp -r libs/cfilament/include dist/android-${{ matrix.abi }}/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cfilament-android-${{ matrix.abi }}
+          path: dist/android-${{ matrix.abi }}/
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # iOS (device arm64 + simulator arm64/x86_64)
+  # ────────────────────────────────────────────────────────────────────────────
+  ios:
+    name: iOS ${{ matrix.sdk }}
+    runs-on: macos-14
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sdk: iphoneos
+            arch: arm64
+            artifact_name: ios-device
+          - sdk: iphonesimulator
+            arch: "arm64;x86_64"
+            artifact_name: ios-simulator
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: brew install ninja
+
+      - name: Configure CMake
+        run: |
+          cmake -S . -B build/${{ matrix.artifact_name }} \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+            -DCMAKE_TOOLCHAIN_FILE=third_party/clang/ios.cmake \
+            -DIOS=ON \
+            -DCMAKE_OSX_SYSROOT=$(xcrun --sdk ${{ matrix.sdk }} --show-sdk-path) \
+            -DCMAKE_OSX_ARCHITECTURES="${{ matrix.arch }}" \
+            -DFILAMENT_SKIP_SAMPLES=ON \
+            -DFILAMENT_BUILD_TESTING=OFF \
+            -DFILAMENT_BUILD_FILAMAT=OFF \
+            -DFILAMENT_SUPPORTS_METAL=ON \
+            -DFILAMENT_SKIP_SDL2=ON
+
+      - name: Build cfilament
+        run: cmake --build build/${{ matrix.artifact_name }} --target cfilament --parallel $(sysctl -n hw.logicalcpu)
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist/${{ matrix.artifact_name }}
+          find build/${{ matrix.artifact_name }} -name "libcfilament*.dylib" -o -name "libcfilament.a" | \
+            xargs -I{} cp {} dist/${{ matrix.artifact_name }}/
+          [ -d libs/cfilament/include ] && cp -r libs/cfilament/include dist/${{ matrix.artifact_name }}/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cfilament-${{ matrix.artifact_name }}
+          path: dist/${{ matrix.artifact_name }}/
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Bundle release – only on tag push
+  # ────────────────────────────────────────────────────────────────────────────
+  release:
+    name: Create GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - windows-x64
+      - windows-arm64
+      - linux-x64
+      - linux-arm64
+      - macos-universal
+      - android
+      - ios
+    runs-on: ubuntu-22.04
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts/
+
+      - name: Zip each platform
+        run: |
+          cd release-artifacts
+          for dir in */; do
+            name="${dir%/}"
+            zip -r "../${name}.zip" "$dir"
+          done
+          cd ..
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "*.zip"
+          generate_release_notes: true
+          name: "cfilament ${{ github.ref_name }}"
+          body: |
+            ## cfilament shared library — ${{ github.ref_name }}
+
+            Pre-built shared libraries for all platforms.
+
+            | Artifact | Platform |
+            |---|---|
+            | `cfilament-windows-x64.zip` | Windows x64 (`cfilament.dll` + import lib) |
+            | `cfilament-windows-arm64.zip` | Windows ARM64 (`cfilament.dll` + import lib) |
+            | `cfilament-linux-x64.zip` | Linux x86_64 (`libcfilament.so`) |
+            | `cfilament-linux-arm64.zip` | Linux ARM64 (`libcfilament.so`) |
+            | `cfilament-macos-universal.zip` | macOS Universal (`libcfilament.dylib`) |
+            | `cfilament-android-arm64-v8a.zip` | Android arm64-v8a |
+            | `cfilament-android-armeabi-v7a.zip` | Android armeabi-v7a |
+            | `cfilament-android-x86_64.zip` | Android x86_64 |
+            | `cfilament-android-x86.zip` | Android x86 |
+            | `cfilament-ios-device.zip` | iOS device (arm64) |
+            | `cfilament-ios-simulator.zip` | iOS simulator (arm64 + x86_64) |
+
+            Each zip contains the shared library and the `include/` headers.
